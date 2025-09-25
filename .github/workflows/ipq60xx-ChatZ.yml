@@ -35,14 +35,12 @@ jobs:
           {"repo": "openwrt", "url": "https://github.com/laipeng668/openwrt.git", "branch": "master"},
           {"repo": "libwrt", "url": "https://github.com/laipeng668/openwrt-6.x.git", "branch": "k6.12-nss"}
         ]' --argjson configs '["Ultra", "Max", "Pro"]' '
-          $repos | map(. as $repo | 
-            $configs | map({
-              repo: $repo.repo,
-              config: .,
-              url: $repo.url,
-              branch: $repo.branch
-            })
-          ) | flatten
+          [$repos[] | . as $repo | $configs[] | {
+            repo: $repo.repo,
+            config: .,
+            url: $repo.url,
+            branch: $repo.branch
+          }]
         ')
         echo "matrix=$matrix" >> $GITHUB_OUTPUT
 
