@@ -29,13 +29,21 @@ jobs:
     - name: 生成编译矩阵
       id: set-matrix
       run: |
+        # 生成包含完整信息的矩阵
         matrix=$(jq -n -c --argjson repos '[
           {"repo": "immwrt", "url": "https://github.com/laipeng668/immortalwrt.git", "branch": "master"},
           {"repo": "openwrt", "url": "https://github.com/laipeng668/openwrt.git", "branch": "master"},
           {"repo": "libwrt", "url": "https://github.com/laipeng668/openwrt-6.x.git", "branch": "k6.12-nss"}
-        ]' --argjson configs '["Ultra", "Max", "Pro"]' '{
-          include: ($repos | map(. as $repo | $configs | map({repo: $repo.repo, config: .}))) | flatten
-        }')
+        ]' --argjson configs '["Ultra", "Max", "Pro"]' '
+          $repos | map(. as $repo | 
+            $configs | map({
+              repo: $repo.repo,
+              config: .,
+              url: $repo.url,
+              branch: $repo.branch
+            })
+          ) | flatten
+        ')
         echo "matrix=$matrix" >> $GITHUB_OUTPUT
 
   build:
@@ -83,10 +91,11 @@ jobs:
 
     - name: 克隆源码
       run: |
-        REPO_INFO=$(jq -r --arg repo "${{ matrix.repo }}" '.[] | select(.repo == $repo) | "\(.url) \(.branch)"' <<< '${{ needs.prepare.outputs.matrix }}')
-        git clone --depth 1 -b $(echo $REPO_INFO | awk '{print $2}') $(echo $REPO_INFO | awk '{print $1}') openwrt
+        # 直接使用矩阵中的URL和分支信息
+        git clone --depth 1 -b "${{ matrix.branch }}" "${{ matrix.url }}" openwrt
         cd openwrt
         echo "REPO_SHORT=${{ matrix.repo }}" >> $GITHUB_ENV
+        echo "克隆完成: ${{ matrix.repo }} - ${{ matrix.branch }}"
 
     - name: 合并配置文件
       id: config
@@ -106,7 +115,7 @@ jobs:
       run: |
         cd openwrt
         # 执行预置脚本
-        bash ../scripts/script.sh  # 修改后的脚本路径
+        bash ../scripts/script.sh
         # 更新feeds
         ./scripts/feeds update -a
         ./scripts/feeds install -a
