@@ -118,13 +118,17 @@ process_artifacts() {
     # 处理日志文件
     log_info "处理日志文件..."
     # 复制编译日志
-    if [ -f "/workdir/openwrt/logs/build.log" ]; then
-        cp -f "/workdir/openwrt/logs/build.log" "${logs_dir}/${branch}-${chip}-${config}-build.log"
+    if [ -f "/workdir/openwrt/logs/script.log" ]; then
+        cp -f "/workdir/openwrt/logs/script.log" "${logs_dir}/${branch}-${chip}-${config}-script.log"
+    fi
+    
+    if [ -f "/workdir/openwrt/logs/script_error.log" ]; then
+        cp -f "/workdir/openwrt/logs/script_error.log" "${logs_dir}/${branch}-${chip}-${config}-script_error.log"
     fi
     
     # 提取错误和警告日志
-    if [ -f "/workdir/openwrt/logs/build.log" ]; then
-        grep -E "error:|warning:" "/workdir/openwrt/logs/build.log" > "${logs_dir}/${branch}-${chip}-${config}-errors.log" || true
+    if [ -f "/workdir/openwrt/logs/script.log" ]; then
+        grep -E "error:|warning:" "/workdir/openwrt/logs/script.log" > "${logs_dir}/${branch}-${chip}-${config}-errors.log" || true
     fi
     
     # 创建编译摘要
