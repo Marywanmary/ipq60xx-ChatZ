@@ -3,15 +3,6 @@ name: OpenWrt固件编译
 on:
   workflow_dispatch:
     inputs:
-      branch:
-        description: '分支'
-        required: true
-        default: 'immwrt'
-        type: choice
-        options:
-        - immwrt
-        - openwrt
-        - libwrt
       chip:
         description: '芯片架构'
         required: true
@@ -19,15 +10,6 @@ on:
         type: choice
         options:
         - ipq60xx
-      config:
-        description: '配置'
-        required: true
-        default: 'Ultra'
-        type: choice
-        options:
-        - Ultra
-        - Max
-        - Pro
 
 env:
   REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -36,6 +18,10 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        config: [Ultra, Max, Pro]
+        branch: [immwrt, openwrt, libwrt]
     steps:
     - name: 检出代码
       uses: actions/checkout@v4
@@ -48,7 +34,7 @@ jobs:
         sudo timedatectl set-timezone "$TZ"
         
     - name: 设置缓存
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           dl/
@@ -57,10 +43,10 @@ jobs:
           staging_dir/
           build_dir/
           toolchain/
-        key: ${{ inputs.chip }}-${{ inputs.branch }}-${{ inputs.config }}-${{ hashFiles('configs/*.config') }}
+        key: ${{ inputs.chip }}-${{ matrix.branch }}-${{ matrix.config }}-${{ hashFiles('configs/*.config') }}
         restore-keys: |
-          ${{ inputs.chip }}-${{ inputs.branch }}-${{ inputs.config }}-
-          ${{ inputs.chip }}-${{ inputs.branch }}-
+          ${{ inputs.chip }}-${{ matrix.branch }}-${{ matrix.config }}-
+          ${{ inputs.chip }}-${{ matrix.branch }}-
           ${{ inputs.chip }}-
           
     - name: 显示缓存状态
@@ -109,7 +95,7 @@ jobs:
         
     - name: 合并配置文件
       run: |
-        cat configs/${{ inputs.chip }}_base.config configs/${{ inputs.branch }}_base.config configs/${{ inputs.config }}.config > .config
+        cat configs/${{ inputs.chip }}_base.config configs/${{ matrix.branch }}_base.config configs/${{ matrix.config }}.config > .config
         echo "合并后的配置文件前200行："
         head -n 200 .config
         
@@ -139,12 +125,12 @@ jobs:
         
     - name: 编译固件
       run: |
-        ./scripts/build.sh ${{ inputs.chip }} ${{ inputs.branch }} ${{ inputs.config }} "${{ steps.devices.outputs.devices }}"
+        ./scripts/build.sh ${{ inputs.chip }} ${{ matrix.branch }} ${{ matrix.config }} "${{ steps.devices.outputs.devices }}"
         
     - name: 上传产出物
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
-        name: ${{ inputs.chip }}-${{ inputs.branch }}-${{ inputs.config }}
+        name: ${{ inputs.chip }}-${{ matrix.branch }}-${{ matrix.config }}
         path: |
           output/
         retention-days: 30
@@ -158,7 +144,7 @@ jobs:
       uses: actions/checkout@v4
       
     - name: 下载所有产出物
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         path: artifacts/
         
@@ -193,7 +179,9 @@ jobs:
         - 默认WIFI密码: 12345678
         
         ### 固件信息
-        - 支持设备: ${{ steps.devices.outputs.devices }}
+        - 支持芯片: ${{ inputs.chip }}
+        - 支持分支: immwrt, openwrt, libwrt
+        - 支持配置: Ultra, Max, Pro
         - 内核版本: $KERNEL_VERSION
         - 作者: Mary
         - 发布时间: $(date +%Y-%m-%d)
