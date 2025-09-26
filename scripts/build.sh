@@ -1,106 +1,304 @@
 #!/bin/bash
-# OpenWrt编译及产出物管理脚本
-# 功能：执行编译、收集产出物、重命名文件、打包分类
-# 参数：$1=分支缩写 $2=配置类型 $3=芯片架构
 
-set -euo pipefail  # 严格错误处理
+# ====== 脚本配置 ======
+# 设置错误退出
+set -e
+set -o pipefail
 
-# 参数校验
-if [ $# -ne 3 ]; then
-    echo "错误：参数不足！用法: $0 <分支缩写> <配置类型> <芯片架构>"
-    exit 1
-fi
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+PLAIN='\033[0m'
 
-REPO_SHORT=$1
-CONFIG_TYPE=$2
-CHIP_ARCH=$3
-WORKSPACE=$(pwd)
-BUILD_DIR="$WORKSPACE/openwrt"
-ARTIFACTS_DIR="$WORKSPACE/artifacts"
+# 创建日志目录
+mkdir -p logs
 
-# 创建目录结构
-mkdir -p "$ARTIFACTS_DIR"/{config,log,app}
+# 日志文件
+LOG_FILE="logs/build.log"
+ERROR_LOG_FILE="logs/build_error.log"
+SUMMARY_LOG_FILE="logs/build_summary.log"
 
-echo "=== 开始编译：$REPO_SHORT-$CONFIG_TYPE-$CHIP_ARCH ==="
+# ====== 日志函数 ======
+log_info() {
+    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $1"
+    echo -e "${GREEN}${msg}${PLAIN}" | tee -a ${LOG_FILE}
+}
 
-# 1. 合并配置文件
-echo "步骤1：合并配置文件..."
-cat "$WORKSPACE/configs/${CHIP_ARCH}_base.config" \
-    "$WORKSPACE/configs/${REPO_SHORT}_base.config" \
-    "$WORKSPACE/configs/${CONFIG_TYPE}.config" > "$BUILD_DIR/.config"
+log_warn() {
+    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] $1"
+    echo -e "${YELLOW}${msg}${PLAIN}" | tee -a ${LOG_FILE}
+}
 
-# 2. 提取设备名称
-echo "步骤2：提取设备名称..."
-DEVICE_NAME=$(grep -oP 'CONFIG_TARGET_DEVICE_.*_DEVICE_\K.*(?==y)' "$BUILD_DIR/.config" | head -1)
-if [ -z "$DEVICE_NAME" ]; then
-    echo "错误：无法从配置中提取设备名称！"
-    exit 1
-fi
-echo "检测到设备名称: $DEVICE_NAME"
+log_error() {
+    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $1"
+    echo -e "${RED}${msg}${PLAIN}" | tee -a ${LOG_FILE}
+    echo -e "${msg}" >> ${ERROR_LOG_FILE}
+}
 
-# 3. 准备编译环境
-echo "步骤3：准备编译环境..."
-cd "$BUILD_DIR"
-bash "$WORKSPACE/scripts/scripts.sh"  # 执行预置脚本
-./scripts/feeds update -a
-./scripts/feeds install -a
-make defconfig
+log_debug() {
+    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [DEBUG] $1"
+    echo -e "${BLUE}${msg}${PLAIN}" | tee -a ${LOG_FILE}
+}
 
-# 4. 编译固件
-echo "步骤4：开始编译..."
-export CCACHE_DIR="$WORKSPACE/.ccache"
-export CCACHE_COMPRESS=1
-export CCACHE_MAXSIZE=5G
+log_step() {
+    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [STEP] $1"
+    echo -e "${CYAN}${msg}${PLAIN}" | tee -a ${LOG_FILE}
+}
 
-start_time=$(date +%s)
-make -j$(nproc) 2>&1 | tee "$ARTIFACTS_DIR/log/build.log"
-end_time=$(date +%s)
+log_progress() {
+    local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [PROGRESS] $1"
+    echo -e "${GREEN}${msg}${PLAIN}" | tee -a ${LOG_FILE} ${SUMMARY_LOG_FILE}
+}
 
-# 检查编译状态
-if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "::error::编译失败！保存错误日志..."
-    tail -n 1000 "$ARTIFACTS_DIR/log/build.log" > "$ARTIFACTS_DIR/log/error.log"
-    exit 1
-fi
+# ====== 错误处理函数 ======
+handle_error() {
+    log_error "脚本在第 $1 行发生错误，错误代码: $2"
+    # 记录错误前1000行日志
+    echo -e "\n===== 错误前1000行日志 =====" >> ${ERROR_LOG_FILE}
+    tail -n 1000 ${LOG_FILE} >> ${ERROR_LOG_FILE}
+    exit $2
+}
 
-echo "编译耗时: $((end_time - start_time)) 秒"
+# 设置错误处理陷阱
+trap 'handle_error ${LINENO} $?' ERR
 
-# 5. 收集产出物
-echo "步骤5：收集产出物..."
-
-# 5.1 固件文件处理
-for bin in bin/targets/*/*/*.bin; do
-    if [[ $bin =~ .*$CHIP_ARCH.*-(factory|sysupgrade)\.bin$ ]]; then
-        type=$(basename "$bin" | sed -n 's/.*-\(factory\|sysupgrade\)\.bin/\1/p')
-        new_name="${REPO_SHORT}-${CHIP_ARCH}-${DEVICE_NAME}-${type}-${CONFIG_TYPE}.bin"
-        cp "$bin" "$ARTIFACTS_DIR/$new_name"
-        echo "固件重命名: $(basename $bin) -> $new_name"
+# ====== 执行函数 ======
+# 安全执行命令，出错时记录并退出
+safe_exec() {
+    log_debug "执行: $*"
+    if ! "$@" >> ${LOG_FILE} 2>&1; then
+        log_error "命令执行失败: $*"
+        return 1
     fi
-done
+    return 0
+}
 
-# 5.2 配置文件处理
-cp "$BUILD_DIR/.config" "$ARTIFACTS_DIR/config/${REPO_SHORT}-${CHIP_ARCH}-${DEVICE_NAME}-${CONFIG_TYPE}.config"
-[ -f "$BUILD_DIR/.config.buildinfo" ] && cp "$BUILD_DIR/.config.buildinfo" "$ARTIFACTS_DIR/config/${REPO_SHORT}-${CHIP_ARCH}-${DEVICE_NAME}-${CONFIG_TYPE}.config.buildinfo"
-[ -f "$BUILD_DIR/.manifest" ] && cp "$BUILD_DIR/.manifest" "$ARTIFACTS_DIR/config/${REPO_SHORT}-${CHIP_ARCH}-${DEVICE_NAME}-${CONFIG_TYPE}.manifest"
+# ====== 主要功能函数 ======
+# 显示缓存状态
+show_cache_status() {
+    log_info "缓存状态:"
+    
+    if [ -d "dl" ]; then
+        local dl_size=$(du -sh dl | cut -f1)
+        log_info "dl 目录存在，大小: $dl_size"
+    else
+        log_info "dl 目录不存在"
+    fi
+    
+    if [ -d "feeds" ]; then
+        local feeds_size=$(du -sh feeds | cut -f1)
+        log_info "feeds 目录存在，大小: $feeds_size"
+    else
+        log_info "feeds 目录不存在"
+    fi
+    
+    if [ -d ".ccache" ]; then
+        local ccache_size=$(du -sh .ccache | cut -f1)
+        log_info "ccache 目录存在，大小: $ccache_size"
+    else
+        log_info "ccache 目录不存在"
+    fi
+    
+    if [ -d "staging_dir" ]; then
+        local staging_size=$(du -sh staging_dir | cut -f1)
+        log_info "staging_dir 目录存在，大小: $staging_size"
+    else
+        log_info "staging_dir 目录不存在"
+    fi
+    
+    if [ -d "build_dir" ]; then
+        local build_size=$(du -sh build_dir | cut -f1)
+        log_info "build_dir 目录存在，大小: $build_size"
+    else
+        log_info "build_dir 目录不存在"
+    fi
+    
+    if [ -d "toolchain" ]; then
+        local toolchain_size=$(du -sh toolchain | cut -f1)
+        log_info "toolchain 目录存在，大小: $toolchain_size"
+    else
+        log_info "toolchain 目录不存在"
+    fi
+}
 
-# 5.3 软件包收集
-mkdir -p "$ARTIFACTS_DIR/app"
-find "$BUILD_DIR/bin/packages" -name "*.ipk" -exec cp {} "$ARTIFACTS_DIR/app/" \;
+# 初始化编译环境
+init_build_env() {
+    log_step "初始化编译环境..."
+    
+    # 显示缓存状态
+    show_cache_status
+    
+    # 更新并安装所有feeds
+    log_progress "更新feeds..."
+    safe_exec ./scripts/feeds update -a
+    log_progress "安装feeds..."
+    safe_exec ./scripts/feeds install -a
+    
+    # 配置构建环境
+    log_progress "配置构建环境..."
+    safe_exec make defconfig
+    
+    log_info "编译环境初始化完成"
+}
 
-# 6. 生成摘要
-echo "步骤6：生成编译摘要..."
-cat > "$ARTIFACTS_DIR/summary.txt" << EOF
-编译摘要
-========================================
-分支: $REPO_SHORT
-配置: $CONFIG_TYPE
-芯片: $CHIP_ARCH
-设备: $DEVICE_NAME
-编译时间: $(date +'%Y-%m-%d %H:%M:%S')
-耗时: $((end_time - start_time)) 秒
-内核版本: $(grep -oP 'CONFIG_LINUX_KERNEL=\K.*' "$BUILD_DIR/.config" | tr -d '"')
-========================================
-EOF
+# 编译固件
+build_firmware() {
+    local chip=$1
+    local branch=$2
+    local config=$3
+    local devices=$4
+    
+    log_step "开始编译固件..."
+    log_info "芯片: $chip, 分支: $branch, 配置: $config"
+    log_info "设备列表: $devices"
+    
+    # 设置编译线程数
+    local threads=$(nproc)
+    log_info "使用 $threads 个线程进行编译"
+    
+    # 下载所需包
+    log_progress "下载所需包..."
+    safe_exec make download -j${threads}
+    
+    # 编译固件
+    log_progress "编译固件..."
+    safe_exec make -j${threads} V=s 2>&1 | grep -E "(error|Error|ERROR|warning|Warning|WARNING|make|Make|MAKE|time|Time|TIME|^\|.*\||Entering directory|Leaving directory)"
+    
+    log_info "固件编译完成"
+}
 
-echo "=== 编译完成：$REPO_SHORT-$CONFIG_TYPE-$CHIP_ARCH ==="
-exit 0
+# 处理产出物
+process_artifacts() {
+    local chip=$1
+    local branch=$2
+    local config=$3
+    local devices=$4
+    
+    log_step "处理产出物..."
+    
+    # 创建输出目录
+    local output_dir="output/${chip}-${branch}-${config}"
+    mkdir -p $output_dir
+    
+    # 将设备字符串转换为数组
+    local device_array=($devices)
+    
+    # 处理每个设备
+    for device in "${device_array[@]}"; do
+        log_info "处理设备: $device"
+        
+        # 查找固件文件
+        local firmware_files=$(find bin/targets/ -name "*${device}*squashfs*.bin")
+        
+        # 处理每个固件文件
+        for firmware in $firmware_files; do
+            # 获取固件类型 (factory 或 sysupgrade)
+            if [[ $firmware == *"factory"* ]]; then
+                local firmware_type="factory"
+            else
+                local firmware_type="sysupgrade"
+            fi
+            
+            # 重命名固件文件
+            local new_firmware_name="${branch}-${chip}-${device}-${firmware_type}-${config}.bin"
+            log_info "重命名固件: $firmware -> $output_dir/$new_firmware_name"
+            cp $firmware "$output_dir/$new_firmware_name"
+        done
+        
+        # 处理manifest文件
+        local manifest_files=$(find bin/targets/ -name "*.manifest")
+        for manifest in $manifest_files; do
+            # 检查manifest文件是否包含当前设备
+            if grep -q "$device" "$manifest"; then
+                local manifest_name="${branch}-${chip}-${device}-${config}.manifest"
+                log_info "复制manifest文件: $manifest -> $output_dir/$manifest_name"
+                cp $manifest "$output_dir/$manifest_name"
+            fi
+        done
+    done
+    
+    # 处理配置文件
+    if [ -f ".config" ]; then
+        local config_name="${branch}-${chip}-${config}.config"
+        log_info "复制配置文件: .config -> $output_dir/$config_name"
+        cp .config "$output_dir/$config_name"
+    fi
+    
+    # 处理config.buildinfo文件
+    if [ -d "bin/targets" ]; then
+        local buildinfo_files=$(find bin/targets/ -name "config.buildinfo")
+        for buildinfo in $buildinfo_files; do
+            local buildinfo_name="${branch}-${chip}-${config}.config.buildinfo"
+            log_info "复制buildinfo文件: $buildinfo -> $output_dir/$buildinfo_name"
+            cp $buildinfo "$output_dir/$buildinfo_name"
+        done
+    fi
+    
+    # 复制日志文件
+    log_info "复制日志文件..."
+    cp logs/*.log $output_dir/
+    
+    # 复制软件包
+    local packages_dirs=$(find bin/packages -type d -name "base" 2>/dev/null)
+    for packages_dir in $packages_dirs; do
+        if [ -d "$packages_dir" ]; then
+            local app_output_dir="$output_dir/packages"
+            mkdir -p $app_output_dir
+            log_info "复制软件包: $packages_dir -> $app_output_dir"
+            cp -r $packages_dir/* $app_output_dir/
+        fi
+    done
+    
+    # 创建压缩包
+    log_info "创建压缩包..."
+    cd $output_dir/..
+    
+    # 配置文件压缩包
+    tar -czf "${chip}-config.tar.gz" "${chip}-${branch}-${config}/"*.config "${chip}-${branch}-${config}/"*.config.buildinfo "${chip}-${branch}-${config}/"*.manifest
+    
+    # 日志文件压缩包
+    tar -czf "${chip}-log.tar.gz" "${chip}-${branch}-${config}/"*.log
+    
+    # 软件包压缩包
+    if [ -d "${chip}-${branch}-${config}/packages" ]; then
+        tar -czf "${chip}-app.tar.gz" -C "${chip}-${branch}-${config}" packages/
+    fi
+    
+    cd ..
+    
+    log_info "产出物处理完成"
+}
+
+# ====== 主函数 ======
+main() {
+    # 检查参数
+    if [ $# -ne 4 ]; then
+        log_error "参数错误: $0 <chip> <branch> <config> <devices>"
+        exit 1
+    fi
+    
+    local chip=$1
+    local branch=$2
+    local config=$3
+    local devices=$4
+    
+    log_info "====== 开始执行编译脚本 ======"
+    log_info "芯片: $chip, 分支: $branch, 配置: $config, 设备: $devices"
+    
+    # 初始化编译环境
+    init_build_env
+    
+    # 编译固件
+    build_firmware $chip $branch $config "$devices"
+    
+    # 处理产出物
+    process_artifacts $chip $branch $config "$devices"
+    
+    log_info "====== 编译脚本执行完成 ======"
+}
+
+# 执行主函数
+main "$@"
