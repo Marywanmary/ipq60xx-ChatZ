@@ -41,6 +41,11 @@ EOF
 
 # 3. 设置默认WiFi密码
 echo "步骤3：设置默认WiFi密码..."
+# 创建必要的目录结构
+mkdir -p package/kernel/mac80211/files/lib/wifi
+# 创建文件（如果不存在）
+touch package/kernel/mac80211/files/lib/wifi/mac80211.sh
+# 追加配置内容
 cat >> package/kernel/mac80211/files/lib/wifi/mac80211.sh << 'EOF'
 append wifi_device "data wifi0 1"
 set wifi0.radio0.channel="auto"
