@@ -12,43 +12,41 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 PLAIN='\033[0m'
 
-# 创建日志目录
-mkdir -p logs
-
-# 日志文件
-LOG_FILE="logs/script.log"
-ERROR_LOG_FILE="logs/script_error.log"
-
 # 获取脚本所在目录的绝对路径
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_FILE_ABS="$SCRIPT_DIR/$LOG_FILE"
-ERROR_LOG_FILE_ABS="$SCRIPT_DIR/$ERROR_LOG_FILE"
+
+# 立即创建日志目录
+mkdir -p "$SCRIPT_DIR/logs"
+
+# 日志文件
+LOG_FILE="$SCRIPT_DIR/logs/script.log"
+ERROR_LOG_FILE="$SCRIPT_DIR/logs/script_error.log"
 
 # ====== 日志函数 ======
 log_info() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $1"
-    echo -e "${GREEN}${msg}${PLAIN}" | tee -a ${LOG_FILE_ABS}
+    echo -e "${GREEN}${msg}${PLAIN}" | tee -a ${LOG_FILE}
 }
 
 log_warn() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] $1"
-    echo -e "${YELLOW}${msg}${PLAIN}" | tee -a ${LOG_FILE_ABS}
+    echo -e "${YELLOW}${msg}${PLAIN}" | tee -a ${LOG_FILE}
 }
 
 log_error() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $1"
-    echo -e "${RED}${msg}${PLAIN}" | tee -a ${LOG_FILE_ABS}
-    echo -e "${msg}" >> ${ERROR_LOG_FILE_ABS}
+    echo -e "${RED}${msg}${PLAIN}" | tee -a ${LOG_FILE}
+    echo -e "${msg}" >> ${ERROR_LOG_FILE}
 }
 
 log_debug() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [DEBUG] $1"
-    echo -e "${BLUE}${msg}${PLAIN}" | tee -a ${LOG_FILE_ABS}
+    echo -e "${BLUE}${msg}${PLAIN}" | tee -a ${LOG_FILE}
 }
 
 log_progress() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [PROGRESS] $1"
-    echo -e "${GREEN}${msg}${PLAIN}" | tee -a ${LOG_FILE_ABS}
+    echo -e "${GREEN}${msg}${PLAIN}" | tee -a ${LOG_FILE}
 }
 
 # ====== 错误处理函数 ======
@@ -64,7 +62,7 @@ trap 'handle_error ${LINENO} $?' ERR
 # 安全执行命令，出错时记录并退出
 safe_exec() {
     log_debug "执行: $*"
-    if ! "$@" >> ${LOG_FILE_ABS} 2>&1; then
+    if ! "$@" >> ${LOG_FILE} 2>&1; then
         log_error "命令执行失败: $*"
         return 1
     fi
