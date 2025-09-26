@@ -19,31 +19,36 @@ mkdir -p logs
 LOG_FILE="logs/script.log"
 ERROR_LOG_FILE="logs/script_error.log"
 
+# 获取脚本所在目录的绝对路径
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_FILE_ABS="$SCRIPT_DIR/$LOG_FILE"
+ERROR_LOG_FILE_ABS="$SCRIPT_DIR/$ERROR_LOG_FILE"
+
 # ====== 日志函数 ======
 log_info() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [INFO] $1"
-    echo -e "${GREEN}${msg}${PLAIN}" | tee -a ${LOG_FILE}
+    echo -e "${GREEN}${msg}${PLAIN}" | tee -a ${LOG_FILE_ABS}
 }
 
 log_warn() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [WARN] $1"
-    echo -e "${YELLOW}${msg}${PLAIN}" | tee -a ${LOG_FILE}
+    echo -e "${YELLOW}${msg}${PLAIN}" | tee -a ${LOG_FILE_ABS}
 }
 
 log_error() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [ERROR] $1"
-    echo -e "${RED}${msg}${PLAIN}" | tee -a ${LOG_FILE}
-    echo -e "${msg}" >> ${ERROR_LOG_FILE}
+    echo -e "${RED}${msg}${PLAIN}" | tee -a ${LOG_FILE_ABS}
+    echo -e "${msg}" >> ${ERROR_LOG_FILE_ABS}
 }
 
 log_debug() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [DEBUG] $1"
-    echo -e "${BLUE}${msg}${PLAIN}" | tee -a ${LOG_FILE}
+    echo -e "${BLUE}${msg}${PLAIN}" | tee -a ${LOG_FILE_ABS}
 }
 
 log_progress() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] [PROGRESS] $1"
-    echo -e "${GREEN}${msg}${PLAIN}" | tee -a ${LOG_FILE}
+    echo -e "${GREEN}${msg}${PLAIN}" | tee -a ${LOG_FILE_ABS}
 }
 
 # ====== 错误处理函数 ======
@@ -59,7 +64,7 @@ trap 'handle_error ${LINENO} $?' ERR
 # 安全执行命令，出错时记录并退出
 safe_exec() {
     log_debug "执行: $*"
-    if ! "$@" >> ${LOG_FILE} 2>&1; then
+    if ! "$@" >> ${LOG_FILE_ABS} 2>&1; then
         log_error "命令执行失败: $*"
         return 1
     fi
@@ -127,31 +132,37 @@ git_sparse_clone() {
     
     # 创建临时目录
     local temp_dir=$(mktemp -d)
+    log_debug "创建临时目录: $temp_dir"
+    
+    # 进入临时目录
     cd "$temp_dir"
     
     # 克隆仓库
+    log_debug "克隆仓库: $repourl 分支: $branch"
     if ! git clone --depth=1 -b $branch --single-branch --filter=blob:none --sparse $repourl; then
-        log_error "克隆仓库失败: $repourl"
-        cd ..
+        log_error "克隆仓库失败: $repourl 分支: $branch"
+        cd "$SCRIPT_DIR"
         rm -rf "$temp_dir"
         return 1
     fi
     
     # 获取仓库名称
     local repodir=$(echo $repourl | awk -F '/' '{print $(NF)}' | sed 's/.git$//')
+    log_debug "仓库名称: $repodir"
     
     # 进入仓库目录
     cd $repodir || {
         log_error "无法进入目录: $repodir"
-        cd ..
+        cd "$SCRIPT_DIR"
         rm -rf "$temp_dir"
         return 1
     }
     
     # 设置稀疏检出
+    log_debug "设置稀疏检出: $*"
     if ! git sparse-checkout set "$@"; then
         log_error "设置稀疏检出失败: $*"
-        cd ../..
+        cd "$SCRIPT_DIR"
         rm -rf "$temp_dir"
         return 1
     fi
@@ -160,23 +171,26 @@ git_sparse_clone() {
     cd ..
     
     # 移动文件
-    if [ ! -d "../package" ]; then
-        mkdir -p ../package
+    log_debug "移动文件: $repodir/$@ -> $SCRIPT_DIR/package/"
+    if [ ! -d "$SCRIPT_DIR/package" ]; then
+        mkdir -p "$SCRIPT_DIR/package"
     fi
     
-    if ! mv -f "$repodir/$@" ../package/; then
-        log_error "移动文件失败: $repodir/$@ -> ../package/"
-        cd ..
+    if ! mv -f "$repodir/$@" "$SCRIPT_DIR/package/"; then
+        log_error "移动文件失败: $repodir/$@ -> $SCRIPT_DIR/package/"
+        cd "$SCRIPT_DIR"
         rm -rf "$temp_dir"
         return 1
     fi
     
-    # 返回原始目录
-    cd ..
+    # 返回脚本目录
+    cd "$SCRIPT_DIR"
     
     # 清理临时目录
+    log_debug "清理临时目录: $temp_dir"
     rm -rf "$temp_dir"
     
+    log_progress "稀疏克隆完成: $repourl"
     return 0
 }
 
@@ -189,6 +203,7 @@ clone_packages() {
     
     # 克隆golang包
     if [ ! -d "feeds/packages/lang/golang" ]; then
+        log_debug "克隆golang包"
         safe_exec git clone --depth=1 https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
     else
         log_debug "golang包已存在，跳过"
@@ -196,6 +211,7 @@ clone_packages() {
     
     # 克隆openlist包
     if [ ! -d "package/openlist" ]; then
+        log_debug "克隆openlist包"
         safe_exec git clone --depth=1 https://github.com/sbwml/luci-app-openlist2 package/openlist
     else
         log_debug "openlist包已存在，跳过"
@@ -206,16 +222,39 @@ clone_packages() {
     
     # 克隆ariang包
     if [ ! -d "package/net/ariang" ]; then
-        git_sparse_clone ariang https://github.com/laipeng668/packages net/ariang
+        log_debug "克隆ariang包"
+        if ! git_sparse_clone ariang https://github.com/laipeng668/packages net/ariang; then
+            log_error "克隆ariang包失败，尝试完整克隆"
+            safe_exec git clone --depth=1 https://github.com/laipeng668/packages -b ariang package/ariang-temp
+            if [ -d "package/ariang-temp/net/ariang" ]; then
+                mkdir -p package/net
+                mv package/ariang-temp/net/ariang package/net/
+                rm -rf package/ariang-temp
+            else
+                log_error "无法找到ariang包目录"
+            fi
+        fi
     else
         log_debug "ariang包已存在，跳过"
     fi
     
     # 克隆frp包
     if [ ! -d "package/net/frp" ]; then
-        git_sparse_clone frp https://github.com/laipeng668/packages net/frp
-        if [ -d "package/frp" ]; then
-            safe_exec mv -f package/frp feeds/packages/net/frp
+        log_debug "克隆frp包"
+        if ! git_sparse_clone frp https://github.com/laipeng668/packages net/frp; then
+            log_error "克隆frp包失败，尝试完整克隆"
+            safe_exec git clone --depth=1 https://github.com/laipeng668/packages -b frp package/frp-temp
+            if [ -d "package/frp-temp/net/frp" ]; then
+                mkdir -p package/net
+                mv package/frp-temp/net/frp package/net/
+                rm -rf package/frp-temp
+            else
+                log_error "无法找到frp包目录"
+            fi
+        fi
+        if [ -d "package/net/frp" ]; then
+            log_debug "移动frp包到feeds目录"
+            safe_exec mv -f package/net/frp feeds/packages/net/frp
         fi
     else
         log_debug "frp包已存在，跳过"
@@ -223,12 +262,29 @@ clone_packages() {
     
     # 克隆luci-app-frpc和luci-app-frps包
     if [ ! -d "package/applications/luci-app-frpc" ]; then
-        git_sparse_clone frp https://github.com/laipeng668/luci applications/luci-app-frpc applications/luci-app-frps
-        if [ -d "package/luci-app-frpc" ]; then
-            safe_exec mv -f package/luci-app-frpc feeds/luci/applications/luci-app-frpc
+        log_debug "克隆luci-app-frpc和luci-app-frps包"
+        if ! git_sparse_clone frp https://github.com/laipeng668/luci applications/luci-app-frpc applications/luci-app-frps; then
+            log_error "克隆luci-app-frpc和luci-app-frps包失败，尝试完整克隆"
+            safe_exec git clone --depth=1 https://github.com/laipeng668/luci -b frp package/luci-temp
+            if [ -d "package/luci-temp/applications/luci-app-frpc" ]; then
+                mkdir -p package/applications
+                mv package/luci-temp/applications/luci-app-frpc package/applications/
+            fi
+            if [ -d "package/luci-temp/applications/luci-app-frps" ]; then
+                mkdir -p package/applications
+                mv package/luci-temp/applications/luci-app-frps package/applications/
+            fi
+            rm -rf package/luci-temp
         fi
-        if [ -d "package/luci-app-frps" ]; then
-            safe_exec mv -f package/luci-app-frps feeds/luci/applications/luci-app-frps
+        
+        if [ -d "package/applications/luci-app-frpc" ]; then
+            log_debug "移动luci-app-frpc包到feeds目录"
+            safe_exec mv -f package/applications/luci-app-frpc feeds/luci/applications/luci-app-frpc
+        fi
+        
+        if [ -d "package/applications/luci-app-frps" ]; then
+            log_debug "移动luci-app-frps包到feeds目录"
+            safe_exec mv -f package/applications/luci-app-frps feeds/luci/applications/luci-app-frps
         fi
     else
         log_debug "luci-app-frpc和luci-app-frps包已存在，跳过"
@@ -236,7 +292,17 @@ clone_packages() {
     
     # 克隆luci-app-wolplus包
     if [ ! -d "package/luci-app-wolplus" ]; then
-        git_sparse_clone main https://github.com/VIKINGYFY/packages luci-app-wolplus
+        log_debug "克隆luci-app-wolplus包"
+        if ! git_sparse_clone main https://github.com/VIKINGYFY/packages luci-app-wolplus; then
+            log_error "克隆luci-app-wolplus包失败，尝试完整克隆"
+            safe_exec git clone --depth=1 https://github.com/VIKINGYFY/packages -b main package/wolplus-temp
+            if [ -d "package/wolplus-temp/luci-app-wolplus" ]; then
+                mv package/wolplus-temp/luci-app-wolplus package/
+                rm -rf package/wolplus-temp
+            else
+                log_error "无法找到luci-app-wolplus包目录"
+            fi
+        fi
     else
         log_debug "luci-app-wolplus包已存在，跳过"
     fi
@@ -246,6 +312,7 @@ clone_packages() {
     
     # 克隆openwrt-gecoosac包
     if [ ! -d "package/openwrt-gecoosac" ]; then
+        log_debug "克隆openwrt-gecoosac包"
         safe_exec git clone --depth=1 https://github.com/lwb1978/openwrt-gecoosac package/openwrt-gecoosac
     else
         log_debug "openwrt-gecoosac包已存在，跳过"
@@ -253,6 +320,7 @@ clone_packages() {
     
     # 克隆luci-app-athena-led包
     if [ ! -d "package/luci-app-athena-led" ]; then
+        log_debug "克隆luci-app-athena-led包"
         safe_exec git clone --depth=1 https://github.com/NONGFAH/luci-app-athena-led package/luci-app-athena-led
         if [ -f "package/luci-app-athena-led/root/etc/init.d/athena_led" ]; then
             safe_exec chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led
