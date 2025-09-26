@@ -19,6 +19,7 @@ jobs:
   build:
     runs-on: ubuntu-22.04
     strategy:
+      max-parallel: 3
       matrix:
         config: [Ultra, Max, Pro]
         branch: [immwrt, openwrt, libwrt]
